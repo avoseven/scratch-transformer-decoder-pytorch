@@ -1,0 +1,15 @@
+# docker-compose.yml
+services:
+  app:
+    build:
+      context: .  # Dockerイメージをビルドするときに参照するディレクトリを指定
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ./src:/workspace/src
+      - ./configs:/workspace/configs
+      - ./data:/workspace/data
+      - ./outputs:/workspace/outputs
+    working_dir: /workspace
+    command: tail -f /dev/null  # tail -f /dev/null (何も出力しないファイルを監視し続けるコマンド)
+                                # のような「終了しないコマンド」を指定して、コンテナを常時起動状態に保つ
+    # GPU設定はコメントアウト or 削除
