@@ -1,70 +1,92 @@
-from transformers import AutoTokenizer
+import sentencepiece as spm
+import torch
 import os
 
 class JapaneseTokenizer:
     """
-    HuggingFaceのAutoTokenizerを使用した日本語用トークナイザークラス。
+    SentencePieceモデルを使用した日本語用トークナイザークラス。
     """
-    def __init__(self, model_name: str = "cl-tohoku/bert-base-japanese-v3"):
+    def __init__(self, model_path: str = "data/tokenizer/news_spm.model"):
         """
         Args:
-            model_name: 使用する学習済みモデル名、またはローカルディレクトリのパス。
+            model_path: 学習済みのSentencePieceモデルファイルのパス。
         """
-        print(f"Loading tokenizer: {model_name}")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"SentencePiece model not found at {model_path}. Please train it first.")
         
-        # Decoderモデルの学習にはパディングトークンが必要。
-        # 設定されていない場合は eos_token を代用する。
-        if self.tokenizer.pad_token is None:
-            if self.tokenizer.eos_token:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
-            else:
-                # どちらもない場合は新しく追加（通常はどちらかがある）
-                self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-                
+        self.sp = spm.SentencePieceProcessor()
+        self.sp.load(model_path)
+        
+        # 特殊トークンのIDを取得
+        self._pad_id = self.sp.pad_id()
+        self._bos_id = self.sp.bos_id()
+        self._eos_id = self.sp.eos_id()
+        self._unk_id = self.sp.unk_id()
+
     def encode(self, text: str, max_length: int = None, padding: bool = False, truncation: bool = True):
-        """テキストをトークンIDに変換する"""
-        return self.tokenizer(
-            text,
-            max_length=max_length,
-            padding=padding,
-            truncation=truncation,
-            return_tensors="pt"
-        )
+        """
+        テキストをトークンIDに変換する。
+        HuggingFace Tokenizerのインターフェースに寄せて実装。
+        """
+        # BOS/EOSを付与してエンコード
+        ids = [self._bos_id] + self.sp.encode_as_ids(text) + [self._eos_id]
+        
+        # 切り捨て
+        if truncation and max_length is not None:
+            ids = ids[:max_length]
+            
+        attention_mask = [1] * len(ids)
+        
+        # パディング
+        if padding and max_length is not None:
+            padding_len = max_length - len(ids)
+            if padding_len > 0:
+                ids += [self._pad_id] * padding_len
+                attention_mask += [0] * padding_len
+                
+        return {
+            "input_ids": torch.tensor([ids]),
+            "attention_mask": torch.tensor([attention_mask])
+        }
 
     def decode(self, token_ids, skip_special_tokens: bool = True):
         """トークンIDをテキストに変換する"""
-        return self.tokenizer.decode(token_ids, skip_special_tokens=skip_special_tokens)
+        if isinstance(token_ids, torch.Tensor):
+            token_ids = token_ids.tolist()
+            
+        if skip_special_tokens:
+            # 特殊トークンを除外
+            special_ids = {self._pad_id, self._bos_id, self._eos_id, self._unk_id}
+            token_ids = [tid for tid in token_ids if tid not in special_ids]
+            
+        return self.sp.decode_ids(token_ids)
 
     @property
     def vocab_size(self) -> int:
         """語彙サイズを返す"""
-        return len(self.tokenizer)
+        return self.sp.get_piece_size()
 
     @property
     def pad_token_id(self) -> int:
-        return self.tokenizer.pad_token_id
+        return self._pad_id
 
     @property
     def bos_token_id(self) -> int:
-        return self.tokenizer.bos_token_id or self.tokenizer.cls_token_id
+        return self._bos_id
 
     @property
     def eos_token_id(self) -> int:
-        return self.tokenizer.eos_token_id or self.tokenizer.sep_token_id
-
-    def save(self, save_dir: str):
-        """トークナイザーの設定を保存する"""
-        self.tokenizer.save_pretrained(save_dir)
+        return self._eos_id
 
 if __name__ == "__main__":
     # 動作確認
     tokenizer = JapaneseTokenizer()
     text = "吾輩は猫である。名前はまだ無い。"
     
-    encoded = tokenizer.encode(text)
+    encoded = tokenizer.encode(text, max_length=20, padding=True)
     print(f"Text: {text}")
     print(f"Encoded IDs: {encoded['input_ids']}")
+    print(f"Attention Mask: {encoded['attention_mask']}")
     print(f"Vocab size: {tokenizer.vocab_size}")
     
     decoded = tokenizer.decode(encoded['input_ids'][0])
