@@ -39,7 +39,7 @@ class CausalSelfAttention(nn.Module):
         self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                         .view(1, 1, config.block_size, config.block_size))
 
-    def forward(self, x):
+    def forward(self, x, attention_mask=None):
         # B:Batch size, T:Time (Seq len), C:Channel (n_embd)
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
@@ -52,8 +52,15 @@ class CausalSelfAttention(nn.Module):
         # Scaled Dot-Product Attention
         # (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        # マスクの適用（未来の情報を遮断）
+        
+        # 1. Causal mask（未来の情報遮断）
         att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+        
+        # 2. Attention mask（パディングの遮断）
+        if attention_mask is not None:
+            # attention_mask: (B, T) -> (B, 1, 1, T) に変形して適用
+            att = att.masked_fill(attention_mask.view(B, 1, 1, T) == 0, float('-inf'))
+
         att = F.softmax(att, dim=-1)
         att = self.attn_dropout(att)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
@@ -96,9 +103,9 @@ class Block(nn.Module):
         self.ln_2 = nn.LayerNorm(config.n_embd)
         self.mlp = MLP(config)
 
-    def forward(self, x):
+    def forward(self, x, attention_mask=None):
         # Pre-norm形式を採用（近年の標準）
-        x = x + self.attn(self.ln_1(x))
+        x = x + self.attn(self.ln_1(x), attention_mask=attention_mask)
         x = x + self.mlp(self.ln_2(x))
         return x
 
@@ -140,7 +147,7 @@ class Transformer(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, attention_mask=None):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -155,7 +162,7 @@ class Transformer(nn.Module):
 
         # Transformerブロックを順に適用
         for block in self.transformer.h:
-            x = block(x)
+            x = block(x, attention_mask=attention_mask)
         x = self.transformer.ln_f(x)
 
         if targets is not None:
