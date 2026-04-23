@@ -49,6 +49,15 @@ class JapaneseTokenizer:
             "attention_mask": torch.tensor([attention_mask])
         }
 
+    def __call__(self, text: str, max_length: int = None, padding: str = "max_length", truncation: bool = True, **kwargs):
+        """
+        クラスを関数のように呼び出した際の挙動（encodeのラッパー）。
+        Datasetクラスなどからの呼び出しに対応。
+        """
+        # padding="max_length" の場合は padding=True として扱う
+        do_padding = (padding == "max_length" or padding is True)
+        return self.encode(text, max_length=max_length, padding=do_padding, truncation=truncation)
+
     def decode(self, token_ids, skip_special_tokens: bool = True):
         """トークンIDをテキストに変換する"""
         if isinstance(token_ids, torch.Tensor):

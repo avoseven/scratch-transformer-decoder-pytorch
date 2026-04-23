@@ -147,6 +147,32 @@ class Transformer(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
+        # 全てのパラメータを取得
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        # 勾配が必要なものだけに絞る
+        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        
+        # 重み減衰を適用するグループと適用しないグループに分ける
+        # 2次元以上の重み（Linearのweightなど）は適用する
+        # 1次元の重み（biasやLayerNormのweightなど）は適用しない
+        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        
+        optim_groups = [
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': nodecay_params, 'weight_decay': 0.0}
+        ]
+        
+        num_decay_params = sum(p.numel() for p in decay_params)
+        num_nodecay_params = sum(p.numel() for p in nodecay_params)
+        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
+        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+        
+        # AdamW オプティマイザを作成
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
+        return optimizer
+
     def forward(self, idx, targets=None, attention_mask=None):
         device = idx.device
         b, t = idx.size()
