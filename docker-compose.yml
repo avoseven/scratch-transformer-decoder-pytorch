@@ -6,6 +6,7 @@ services:
       dockerfile: docker/Dockerfile
     volumes:
       - ./src:/workspace/src
+      - ./tests:/workspace/tests
       - ./configs:/workspace/configs
       - ./data:/workspace/data
       - ./outputs:/workspace/outputs
