@@ -9,9 +9,23 @@ from models.transformer import Transformer, TransformerConfig
 from data.dataset import NewsDataset, load_news_corpus
 from data.tokenizer import JapaneseTokenizer
 
+import argparse
+
 def load_config(config_path="configs/model_config.yaml"):
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
+
+def save_checkpoint(model, optimizer, iteration, loss, config, checkpoint_dir, filename):
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    ckpt_path = os.path.join(checkpoint_dir, filename)
+    torch.save({
+        'iter': iteration,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'config': config,
+        'loss': loss,
+    }, ckpt_path)
+    print(f"Saved checkpoint to {ckpt_path}")
 
 def get_lr(it, train_config):
     # 1) warmup期間
@@ -50,6 +64,10 @@ def estimate_loss(model, train_loader, val_loader, device, eval_iters):
     return out
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--resume', action='store_true', help='latestチェックポイントから学習を再開する')
+    args = parser.parse_args()
+
     # 設定のロード
     config = load_config()
     m_cfg = config['model']
@@ -97,56 +115,73 @@ def main():
         (t_cfg['beta1'], t_cfg['beta2']), device_type
     )
 
+    # --- 再開（Resume）処理 ---
+    start_iter = 0
+    if args.resume:
+        # 拡張子が .pt のファイルをすべて取得
+        checkpoint_files = [f for f in os.listdir(p_cfg['checkpoint_dir']) if f.endswith(".pt")]
+        if checkpoint_files:
+            # ファイルの更新日時（mtime）が最新のものを取得
+            checkpoint_files.sort(key=lambda x: os.path.getmtime(os.path.join(p_cfg['checkpoint_dir'], x)), reverse=True)
+            latest_ckpt = os.path.join(p_cfg['checkpoint_dir'], checkpoint_files[0])
+            
+            print(f"Resuming from the latest checkpoint: {latest_ckpt}")
+            checkpoint = torch.load(latest_ckpt, map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            start_iter = checkpoint['iter'] + 1
+        else:
+            print("No checkpoints found. Starting from scratch.")
+    # -----------------------
+
     # 4. 学習ループ
     iter_loader = iter(train_loader)
-    print(f"Starting training on {device}...")
+    print(f"Starting training on {device} from iter {start_iter}...")
     start_time = time.time()
 
-    for i in range(t_cfg['max_iters']):
-        # 学習率の更新
-        lr = get_lr(i, t_cfg)
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
+    try:
+        for i in range(start_iter, t_cfg['max_iters']):
+            # 学習率の更新
+            lr = get_lr(i, t_cfg)
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr
 
-        # 定期的なバリデーション
-        if i % t_cfg['eval_interval'] == 0:
-            losses = estimate_loss(model, train_loader, val_loader, device, t_cfg['eval_iters'])
-            print(f"step {i}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.2e}")
+            # 定期的なバリデーション
+            if i % t_cfg['eval_interval'] == 0:
+                losses = estimate_loss(model, train_loader, val_loader, device, t_cfg['eval_iters'])
+                print(f"step {i}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.2e}")
 
-        # データの取得
-        try:
-            batch = next(iter_loader)
-        except StopIteration:
-            iter_loader = iter(train_loader)
-            batch = next(iter_loader)
+            # データの取得
+            try:
+                batch = next(iter_loader)
+            except StopIteration:
+                iter_loader = iter(train_loader)
+                batch = next(iter_loader)
 
-        x = batch['input_ids'].to(device)
-        y = batch['labels'].to(device)
-        mask = batch['attention_mask'].to(device)
+            x = batch['input_ids'].to(device)
+            y = batch['labels'].to(device)
+            mask = batch['attention_mask'].to(device)
 
-        # Forward / Backward
-        logits, loss = model(x, targets=y, attention_mask=mask)
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        
-        if t_cfg['grad_clip'] != 0.0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), t_cfg['grad_clip'])
-        optimizer.step()
+            # Forward / Backward
+            logits, loss = model(x, targets=y, attention_mask=mask)
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            
+            if t_cfg['grad_clip'] != 0.0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), t_cfg['grad_clip'])
+            optimizer.step()
 
-        if i % 10 == 0:
-            print(f"iter {i}: loss {loss.item():.4f}")
+            if i % 10 == 0:
+                print(f"iter {i}: loss {loss.item():.4f}")
 
-        # 保存
-        if i > 0 and i % t_cfg['save_interval'] == 0:
-            ckpt_path = os.path.join(p_cfg['checkpoint_dir'], f"ckpt_iter_{i}.pt")
-            torch.save({
-                'iter': i,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'config': model_config,
-                'loss': loss.item(),
-            }, ckpt_path)
-            print(f"Saved checkpoint to {ckpt_path}")
+            # 保存
+            if i > 0 and i % t_cfg['save_interval'] == 0:
+                save_checkpoint(model, optimizer, i, loss.item(), model_config, p_cfg['checkpoint_dir'], f"ckpt_iter_{i}.pt")
+
+    except KeyboardInterrupt:
+        print("\nTraining interrupted by user. Saving current state...")
+        save_checkpoint(model, optimizer, i, loss.item(), model_config, p_cfg['checkpoint_dir'], "ckpt_interrupted.pt")
+        print("Done.")
 
     print(f"Training finished! Total time: {time.time() - start_time:.2f}s")
 
