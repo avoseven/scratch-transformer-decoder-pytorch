@@ -177,6 +177,9 @@ def main():
             # 保存
             if i > 0 and i % t_cfg['save_interval'] == 0:
                 save_checkpoint(model, optimizer, i, loss.item(), model_config, p_cfg['checkpoint_dir'], f"ckpt_iter_{i}.pt")
+        
+        # 学習完了後に最終チェックポイントを保存
+        save_checkpoint(model, optimizer, t_cfg['max_iters'], loss.item(), model_config, p_cfg['checkpoint_dir'], "ckpt_final.pt")
 
     except KeyboardInterrupt:
         print("\nTraining interrupted by user. Saving current state...")
