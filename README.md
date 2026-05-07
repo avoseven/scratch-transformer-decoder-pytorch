@@ -29,13 +29,19 @@ docker compose exec -d app sh -c "python -u src/train.py --resume >> outputs/tra
 
 ### 4. 進捗の確認
 ```bash
-tail -f outputs/train.log
+docker compose exec app tail -f outputs/train.log
 ```
 
 ### 5. 安全な中断
 計算を安全に停止し、その瞬間の状態を `ckpt_interrupted.pt` として保存します。
 ```bash
-docker compose exec app pkill -INT -f "python src/train.py"
+docker compose exec app pkill -INT -f "src/train.py"
+```
+
+## 使い方 (文章生成)
+最新のチェックポイントを使用して文章を生成します．
+```bash
+docker compose exec app python3 src/generate.py --prompt "私は" --checkpoint outputs/checkpoints/ckpt_final.pt
 ```
 
 ## ディレクトリ構成
@@ -53,7 +59,7 @@ scratch-transformer-decoder-pytorch/
 │   │   ├── dataset.py         # Datasetクラス
 │   │   └── tokenizer.py       # トークナイザ
 │   ├── train.py               # 学習スクリプト（Resume/中断機能付き）
-│   └── generate.py            # 生成スクリプト
+│   └── generate.py            # 生成スクリプト (EOS除去修正済)
 ├── configs/
 │   └── model_config.yaml      # モデル・学習設定
 ├── data/                      # コーパス・トークナイザーモデル
@@ -68,6 +74,19 @@ scratch-transformer-decoder-pytorch/
 - [x] Transformerデコーダのスクラッチ実装（Flash Attention対応）
 - [x] Dataset／DataLoaderの実装
 - [x] 学習スクリプト（train.py）の実装（Resume機能、中断保存機能）
-- [ ] 生成スクリプト（generate.py）の調整
-- [ ] 大規模学習の実施
+- [x] 生成スクリプト（generate.py）の実装
+- [x] 大規模学習の実施 (50000回実施，Overfittingを確認)
+- [ ] 生成文章の改善
 - [ ] READMEへの技術解説・生成例の追加
+
+## 学習結果と考察 (50,000 iterations)
+
+50,000回のFull学習 (`ckpt_final.pt`)の結果，以下の知見が得られました．
+
+1. **過学習の発生**:
+    - Train Loss: 0.1448 / Val Loss: 6.1779
+    - 学習Dataをほぼ暗記するまで？学習が進みましたが，検証Dataに対するLossが高く，強い過学習の状態にあります．
+2. **生成品質の限界**:
+    - News記事特有のPhraseや固有名詞 (iPhone 4S等)は再現できますが？，文章全体の論理的な一貫性を保つには13.8MというModel sizeでは限界があるか．
+3. **技術的修正**:
+    - Promptの末尾にEOS (終了符号)が付与されていると生成が壊れる問題を特定し，`generate.py`にて除去処理を実装しました．

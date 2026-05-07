@@ -16,14 +16,14 @@ train:
   beta2: 0.95
   grad_clip: 1.0
   
-  max_iters: 10000
+  max_iters: 50000
   warmup_iters: 200
-  lr_decay_iters: 10000 # max_itersと同じに設定
+  lr_decay_iters: 50000 # max_itersと同じに設定
   min_lr: 0.00006 # learning_rate / 10 程度
   
   eval_interval: 500
   eval_iters: 50
-  save_interval: 1000
+  save_interval: 5000
 
 # パス設定
 paths:
