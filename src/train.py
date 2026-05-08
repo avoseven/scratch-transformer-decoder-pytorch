@@ -63,6 +63,26 @@ def estimate_loss(model, train_loader, val_loader, device, eval_iters):
     model.train()
     return out
 
+def setting_resume(checkpoint_dir, model, optimizer, device='cpu'):
+    start_iter = 0
+    # 拡張子が .pt のファイルをすべて取得
+    checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")]
+    if checkpoint_files:
+        # ファイルの更新日時（mtime）が最新のものを取得
+        checkpoint_files.sort(key=lambda x: os.path.getmtime(os.path.join(checkpoint_dir, x)), reverse=True)
+        latest_ckpt = os.path.join(checkpoint_dir, checkpoint_files[0])
+        
+        print(f"Resuming from the latest checkpoint: {latest_ckpt}")
+        checkpoint = torch.load(latest_ckpt, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_iter = checkpoint['iter'] + 1
+    else:
+        print("No checkpoints found. Starting from scratch.")
+        #start_iter = 0
+
+    return start_iter
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--resume', action='store_true', help='latestチェックポイントから学習を再開する')
@@ -74,14 +94,12 @@ def main():
     t_cfg = config['train']
     p_cfg = config['paths']
     
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     if torch.cuda.is_available():
-        device_type = 'cuda'
+        device = 'cuda'
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         device = 'mps'
-        device_type = 'mps'
     else:
-        device_type = 'cpu'
+        device = 'cpu'
     
     os.makedirs(p_cfg['checkpoint_dir'], exist_ok=True)
 
@@ -112,26 +130,13 @@ def main():
     # 3. オプティマイザ
     optimizer = model.configure_optimizers(
         t_cfg['weight_decay'], t_cfg['learning_rate'], 
-        (t_cfg['beta1'], t_cfg['beta2']), device_type
+        (t_cfg['beta1'], t_cfg['beta2'])
     )
 
     # --- 再開（Resume）処理 ---
     start_iter = 0
     if args.resume:
-        # 拡張子が .pt のファイルをすべて取得
-        checkpoint_files = [f for f in os.listdir(p_cfg['checkpoint_dir']) if f.endswith(".pt")]
-        if checkpoint_files:
-            # ファイルの更新日時（mtime）が最新のものを取得
-            checkpoint_files.sort(key=lambda x: os.path.getmtime(os.path.join(p_cfg['checkpoint_dir'], x)), reverse=True)
-            latest_ckpt = os.path.join(p_cfg['checkpoint_dir'], checkpoint_files[0])
-            
-            print(f"Resuming from the latest checkpoint: {latest_ckpt}")
-            checkpoint = torch.load(latest_ckpt, map_location=device)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            start_iter = checkpoint['iter'] + 1
-        else:
-            print("No checkpoints found. Starting from scratch.")
+        start_iter = setting_resume(p_cfg['checkpoint_dir'], model, optimizer, device)
     # -----------------------
 
     # 4. 学習ループ

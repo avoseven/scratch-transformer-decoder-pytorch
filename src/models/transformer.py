@@ -147,7 +147,7 @@ class Transformer(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
+    def configure_optimizers(self, weight_decay, learning_rate, betas):
         # 全てのパラメータを取得
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # 勾配が必要なものだけに絞る
