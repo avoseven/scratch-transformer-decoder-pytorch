@@ -66,14 +66,35 @@ def generate(model, tokenizer, prompt, max_new_tokens=50, temperature=1.0, top_k
     # 特殊トークンを除いてデコード
     return tokenizer.decode(idx[0])
 
-def main():
+def parse_arguments():
     parser = argparse.ArgumentParser(description='Transformer Decoder テキスト生成')
     parser.add_argument('--prompt', type=str, default="今日", help='生成の起点となるテキスト')
     parser.add_argument('--max_new_tokens', type=int, default=100, help='追加で生成する最大トークン数')
     parser.add_argument('--temperature', type=float, default=0.8, help='サンプリングの温度 (0.0~, デフォルト: 0.8)')
     parser.add_argument('--top_k', type=int, default=50, help='Top-KサンプリングのK (デフォルト: 50)')
     parser.add_argument('--checkpoint', type=str, default=None, help='使用するチェックポイントのパス (未指定なら最新を使用)')
-    args = parser.parse_args()
+    return parser.parse_args()
+
+def select_checkpoint(checkpoint_dir, device='cpu', user_checkpoint_path=None):
+    # チェックポイントの決定
+    if user_checkpoint_path is None:
+        ckpt_files = [f for f in os.listdir(checkpoint_dir) if f.endswith('.pt')]
+        if not ckpt_files:
+            print(f"No checkpoints found in {checkpoint_dir}")
+            #return
+            raise FileNotFoundError(f"No checkpoints found in {checkpoint_dir}")
+        # ファイルの更新日時が最新のものを取得
+        ckpt_files.sort(key=lambda x: os.path.getmtime(os.path.join(checkpoint_dir, x)), reverse=True)
+        checkpoint_path = os.path.join(checkpoint_dir, ckpt_files[0])
+    else:
+        checkpoint_path = user_checkpoint_path
+    
+    print(f"Using device: {device}")
+    print(f"Loading checkpoint: {checkpoint_path}")
+    return torch.load(checkpoint_path, map_location=device)
+
+def main():
+    args = parse_arguments()
 
     # 設定のロード
     config = load_config()
@@ -90,20 +111,12 @@ def main():
     tokenizer = JapaneseTokenizer(config['paths']['tokenizer_model'])
     
     # チェックポイントの決定
-    checkpoint_path = args.checkpoint
-    if checkpoint_path is None:
-        checkpoint_dir = config['paths']['checkpoint_dir']
-        ckpt_files = [f for f in os.listdir(checkpoint_dir) if f.endswith('.pt')]
-        if not ckpt_files:
-            print(f"No checkpoints found in {checkpoint_dir}")
-            return
-        # ファイルの更新日時が最新のものを取得
-        ckpt_files.sort(key=lambda x: os.path.getmtime(os.path.join(checkpoint_dir, x)), reverse=True)
-        checkpoint_path = os.path.join(checkpoint_dir, ckpt_files[0])
-    
-    print(f"Using device: {device}")
-    print(f"Loading checkpoint: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    #checkpoint = select_checkpoint(config['paths']['checkpoint_dir'], device, args.checkpoint)
+    try:
+        checkpoint = select_checkpoint(config['paths']['checkpoint_dir'], device, args.checkpoint)
+    except FileNotFoundError as e:
+        print(e)
+        return  # プログラムを終了
     
     # モデルの初期化と重みのロード
     # TransformerConfigの代わりにcheckpointからconfigを復元
