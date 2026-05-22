@@ -1,7 +1,9 @@
 scikit-learn
 pyyaml
 tqdm
-transformers
+transformers==5.7.0
 sentencepiece
 fugashi
 unidic-lite
+protobuf
+torch

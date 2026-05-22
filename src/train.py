@@ -8,8 +8,9 @@ from sklearn.model_selection import train_test_split
 from models.transformer import Transformer, TransformerConfig
 from data.dataset import NewsDataset, load_news_corpus
 from data.tokenizer import JapaneseTokenizer
-
 import argparse
+
+from utils import model_init, optimizer_init
 
 def load_config(config_path="configs/model_config.yaml"):
     with open(config_path, "r") as f:
@@ -18,13 +19,17 @@ def load_config(config_path="configs/model_config.yaml"):
 def save_checkpoint(model, optimizer, iteration, loss, config, checkpoint_dir, filename):
     os.makedirs(checkpoint_dir, exist_ok=True)
     ckpt_path = os.path.join(checkpoint_dir, filename)
-    torch.save({
+    checkpoint = {
         'iter': iteration,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        'config': config,
-        'loss': loss,
-    }, ckpt_path)
+        #'config': config,
+        'loss': loss
+    }
+    if config is not None:
+        # scratchモデルの場合
+        checkpoint['config'] = config
+    torch.save(checkpoint, ckpt_path)
     print(f"Saved checkpoint to {ckpt_path}")
 
 def get_lr(it, train_config):
@@ -41,7 +46,7 @@ def get_lr(it, train_config):
     return train_config['min_lr'] + coeff * (train_config['learning_rate'] - train_config['min_lr'])
 
 @torch.no_grad()
-def estimate_loss(model, train_loader, val_loader, device, eval_iters):
+def estimate_loss(model, train_loader, val_loader, device, eval_iters, model_name='scratch'):
     out = {}
     model.eval()
     for split, loader in [('train', train_loader), ('val', val_loader)]:
@@ -55,9 +60,17 @@ def estimate_loss(model, train_loader, val_loader, device, eval_iters):
                 batch = next(iter_loader)
             
             x = batch['input_ids'].to(device)
+            #y = batch['input_ids'].to(device)
             y = batch['labels'].to(device)
             mask = batch['attention_mask'].to(device)
-            _, loss = model(x, targets=y, attention_mask=mask)
+            #_, loss = model(x, targets=y, attention_mask=mask)
+            if model_name == 'scratch':
+                # 自作モデル
+                _, loss = model(x, labels=y, attention_mask=mask)
+            else:
+                # 公開モデル
+                outputs = model(x, labels=y, attention_mask=mask)
+                loss = outputs.loss
             losses[k] = loss.item()
         out[split] = losses.mean()
     model.train()
@@ -83,7 +96,42 @@ def setting_resume(checkpoint_dir, model, optimizer, device='cpu'):
 
     return start_iter
 
+def train_step(model, batch, optimizer, grad_clip, device, model_name='scratch'):
+    x = batch['input_ids'].to(device)
+    y = batch['labels'].to(device)
+    mask = batch['attention_mask'].to(device)
+    # Debug用
+    #print(f"{len(x)=}, {len(y)=}, {len(mask)=}")
+    #print(f"[TrainStep] mask[0, :10] = {mask[0, :10]}")
+    #print(model_name)
+    #print(x[10])
+    #print(y[10])
+    #print(mask[10])
+
+    # Forward / Backward
+    if model_name == 'scratch':
+        # 自作モデル
+        logits, loss = model(x, labels=y, attention_mask=mask)
+    else:
+        # 公開モデル
+        outputs = model(x, labels=y, attention_mask=mask)
+        logits = outputs.logits
+        loss = outputs.loss
+        # Debug
+        #print("outputs.keys():", outputs.keys())
+        #print("loss:", outputs.loss)
+        #print("logits shape:", outputs.logits.shape)
+    optimizer.zero_grad(set_to_none=True)
+    loss.backward()
+
+    if grad_clip != 0.0:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+    optimizer.step()
+
+    return loss.item()
+
 def main():
+    # 残：train_step()リファクタリングしたい
     parser = argparse.ArgumentParser()
     parser.add_argument('--resume', action='store_true', help='latestチェックポイントから学習を再開する')
     args = parser.parse_args()
@@ -103,8 +151,16 @@ def main():
     
     os.makedirs(p_cfg['checkpoint_dir'], exist_ok=True)
 
-    # 1. トークナイザーとデータのロード
-    tokenizer = JapaneseTokenizer(p_cfg['tokenizer_model'])
+    # 1.1. トークナイザーのロード
+    if m_cfg['model_name'] == 'scratch':
+        # 自作モデル
+        tokenizer = JapaneseTokenizer(p_cfg['tokenizer_model'])
+    else:
+        # 公開モデル
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(m_cfg['model_name'])
+
+    # 1.2. データのロード
     print("Loading Livedoor news corpus...")
     all_texts = load_news_corpus(p_cfg['data_dir'])
     train_texts, val_texts = train_test_split(all_texts, test_size=0.1, random_state=42)
@@ -116,22 +172,10 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=t_cfg['batch_size'], shuffle=False)
 
     # 2. モデルの初期化
-    model_config = TransformerConfig(
-        vocab_size=tokenizer.vocab_size,
-        block_size=m_cfg['block_size'],
-        n_layer=m_cfg['n_layer'],
-        n_head=m_cfg['n_head'],
-        n_embd=m_cfg['n_embd'],
-        dropout=m_cfg['dropout'],
-        bias=m_cfg['bias']
-    )
-    model = Transformer(model_config).to(device)
+    model, model_config = model_init(tokenizer, m_cfg, device)
 
     # 3. オプティマイザ
-    optimizer = model.configure_optimizers(
-        t_cfg['weight_decay'], t_cfg['learning_rate'], 
-        (t_cfg['beta1'], t_cfg['beta2'])
-    )
+    optimizer = optimizer_init(t_cfg, model, model_name=m_cfg['model_name'])
 
     # --- 再開（Resume）処理 ---
     start_iter = 0
@@ -153,7 +197,9 @@ def main():
 
             # 定期的なバリデーション
             if i % t_cfg['eval_interval'] == 0:
-                losses = estimate_loss(model, train_loader, val_loader, device, t_cfg['eval_iters'])
+                losses = estimate_loss(
+                    model, train_loader, val_loader, device, t_cfg['eval_iters'], m_cfg['model_name']
+                )
                 print(f"step {i}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.2e}")
 
             # データの取得
@@ -163,32 +209,21 @@ def main():
                 iter_loader = iter(train_loader)
                 batch = next(iter_loader)
 
-            x = batch['input_ids'].to(device)
-            y = batch['labels'].to(device)
-            mask = batch['attention_mask'].to(device)
-
-            # Forward / Backward
-            logits, loss = model(x, targets=y, attention_mask=mask)
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            
-            if t_cfg['grad_clip'] != 0.0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), t_cfg['grad_clip'])
-            optimizer.step()
+            step_loss = train_step(model, batch, optimizer, t_cfg['grad_clip'], device, m_cfg['model_name'])
 
             if i % 10 == 0:
-                print(f"iter {i}: loss {loss.item():.4f}")
+                print(f"iter {i}: loss {step_loss:.4f}")
 
             # 保存
             if i > 0 and i % t_cfg['save_interval'] == 0:
-                save_checkpoint(model, optimizer, i, loss.item(), model_config, p_cfg['checkpoint_dir'], f"ckpt_iter_{i}.pt")
+                save_checkpoint(model, optimizer, i, step_loss, model_config, p_cfg['checkpoint_dir'], f"ckpt_iter_{i}.pt")
         
         # 学習完了後に最終チェックポイントを保存
-        save_checkpoint(model, optimizer, t_cfg['max_iters'], loss.item(), model_config, p_cfg['checkpoint_dir'], "ckpt_final.pt")
+        save_checkpoint(model, optimizer, t_cfg['max_iters'], step_loss, model_config, p_cfg['checkpoint_dir'], "ckpt_final.pt")
 
     except KeyboardInterrupt:
         print("\nTraining interrupted by user. Saving current state...")
-        save_checkpoint(model, optimizer, i, loss.item(), model_config, p_cfg['checkpoint_dir'], "ckpt_interrupted.pt")
+        save_checkpoint(model, optimizer, i, step_loss, model_config, p_cfg['checkpoint_dir'], "ckpt_interrupted.pt")
         print("Done.")
 
     print(f"Training finished! Total time: {time.time() - start_time:.2f}s")

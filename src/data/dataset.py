@@ -102,6 +102,11 @@ class NewsDataset(Dataset):
         
         # 入力側の attention_mask もシフトに合わせて1つ分削る
         x_mask = attention_mask[:-1]
+
+        # デバッグ用：最初の数サンプルだけ表示
+        #print(f"[Dataset {idx}] len(x)={len(x)}, len(y)={len(y)}, len(x_mask)={len(x_mask)}")
+        #print(f"[Dataset {idx}] x_mask[:10] = {x_mask[:10]}")
+        #print(f"[Dataset {idx}] attention_mask[:10] = {attention_mask[:10]}")
         
         return {
             "input_ids": x,
