@@ -1,6 +1,7 @@
 # Data and Outputs
 /data/
 /outputs/
+/outputs_*
 
 # Python
 __pycache__/

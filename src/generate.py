@@ -6,6 +6,8 @@ from models.transformer import Transformer, TransformerConfig
 from data.tokenizer import JapaneseTokenizer
 import argparse
 
+from utils import model_init
+
 def load_config(config_path="configs/model_config.yaml"):
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
@@ -27,41 +29,75 @@ def generate(model, tokenizer, prompt, max_new_tokens=50, temperature=1.0, top_k
     model.eval()
     
     # プロンプトをトークナイズ
-    encoded = tokenizer.encode(prompt)
+    #encoded = tokenizer.encode(prompt)
+    encoded = tokenizer(
+        prompt,
+        padding=False,
+        truncation=True,
+        max_length=model.config.block_size if hasattr(model.config, 'block_size') else None,    # HF ModelはNoneでも可らしい
+        return_tensors='pt'
+    )
     idx = encoded['input_ids'].to(device) # (1, seq_len)
+    # Debug
+    #print(idx)
 
     # プロンプトの末尾がEOS（通常2）の場合、それを削除してから生成を開始する
     if idx[0, -1] == tokenizer.eos_token_id:
         idx = idx[:, :-1]
     
+    # Debug
+    #print(idx)
+
     # 生成ループ
-    for _ in range(max_new_tokens):
-        # コンテキスト窓（block_size）を超えないようにクロップ
-        idx_cond = idx if idx.size(1) <= model.config.block_size else idx[:, -model.config.block_size:]
+    if hasattr(model, 'generate') and callable(getattr(model, 'generate')):
+        # HFモデルの生成ロジック
+        generated_ids = model.generate(
+            input_ids=idx,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            do_sample=True,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+        idx = generated_ids
+        # Debug
+        #print(idx)
+    else:
+        # scratchモデルの生成ロジック
+        for _ in range(max_new_tokens):
+            # コンテキスト窓（block_size）を超えないようにクロップ
+            #idx_cond = idx if idx.size(1) <= model.config.block_size else idx[:, -model.config.block_size:]
+            if hasattr(model.config, 'block_size'):
+                block_size = model.config.block_size
+            elif hasattr(model.config, 'max_position_embeddings'):
+                block_size = model.config.max_position_embeddings
+            else:
+                block_size = 1024  # デフォルト値
+            idx_cond = idx if idx.size(1) <= block_size else idx[:, -block_size:]
         
-        # モデルのフォワード (targets=Noneなので最後のトークンの予測結果のみ返ってくる)
-        logits, _ = model(idx_cond) # logits: (1, 1, vocab_size)
+            # モデルのフォワード (targets=Noneなので最後のトークンの予測結果のみ返ってくる)
+            logits, _ = model(idx_cond) # logits: (1, 1, vocab_size)
         
-        # 最後のタイムステップのロジットを取り出し、温度を適用
-        logits = logits[:, -1, :] / temperature
+            # 最後のタイムステップのロジットを取り出し、温度を適用
+            logits = logits[:, -1, :] / temperature
         
-        # Top-K フィルタリング
-        if top_k is not None:
-            v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-            logits[logits < v[:, [-1]]] = -float('Inf')
+            # Top-K フィルタリング
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
             
-        # 確率分布に変換
-        probs = F.softmax(logits, dim=-1)
+            # 確率分布に変換
+            probs = F.softmax(logits, dim=-1)
         
-        # サンプリング
-        idx_next = torch.multinomial(probs, num_samples=1)
+            # サンプリング
+            idx_next = torch.multinomial(probs, num_samples=1)
         
-        # シーケンスに追加
-        idx = torch.cat((idx, idx_next), dim=1)
+            # シーケンスに追加
+            idx = torch.cat((idx, idx_next), dim=1)
         
-        # EOSトークンが出たら終了
-        if idx_next.item() == tokenizer.eos_token_id:
-            break
+            # EOSトークンが出たら終了
+            if idx_next.item() == tokenizer.eos_token_id:
+                break
             
     # 特殊トークンを除いてデコード
     return tokenizer.decode(idx[0])
@@ -98,6 +134,9 @@ def main():
 
     # 設定のロード
     config = load_config()
+    m_cfg = config['model']
+    t_cfg = config['train']
+    p_cfg = config['paths']
     
     # デバイスの設定
     if torch.cuda.is_available():
@@ -108,7 +147,23 @@ def main():
         device = 'cpu'
     
     # トークナイザーのロード
-    tokenizer = JapaneseTokenizer(config['paths']['tokenizer_model'])
+    #tokenizer = JapaneseTokenizer(config['paths']['tokenizer_model'])
+    if m_cfg['model_name'] == 'scratch':
+        # 自作モデル
+        tokenizer = JapaneseTokenizer(p_cfg['tokenizer_model'])
+    else:
+        # 公開モデル
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(m_cfg['model_name'])
+    # Debug
+    #print("tokenizer.pad_token:", tokenizer.pad_token)
+    #print("tokenizer.pad_token_id:", tokenizer.pad_token_id)
+    #print("tokenizer.eos_token:", tokenizer.eos_token)
+    #print("tokenizer.eos_token_id:", tokenizer.eos_token_id)
+    #print("tokenizer.bos_token:", tokenizer.bos_token)
+    #print("tokenizer.bos_token_id:", tokenizer.bos_token_id)
+    #print("App" in tokenizer.get_vocab())
+    #print("Store" in tokenizer.get_vocab())
     
     # チェックポイントの決定
     #checkpoint = select_checkpoint(config['paths']['checkpoint_dir'], device, args.checkpoint)
@@ -120,9 +175,12 @@ def main():
     
     # モデルの初期化と重みのロード
     # TransformerConfigの代わりにcheckpointからconfigを復元
-    model_config = checkpoint['config']
-    model = Transformer(model_config).to(device)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model, _model_config = model_init(tokenizer, m_cfg, device)
+    
+    #model.load_state_dict(checkpoint['model_state_dict'])
+    missing_keys, unexpected_keys = model.load_state_dict(checkpoint['model_state_dict'])
+    #print("missing_keys:", missing_keys)
+    #print("unexpected_keys:", unexpected_keys)
     
     print(f"\nPrompt: {args.prompt}")
     print("-" * 30)

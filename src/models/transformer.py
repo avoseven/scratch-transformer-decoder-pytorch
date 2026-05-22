@@ -173,16 +173,17 @@ class Transformer(nn.Module):
         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
         return optimizer
 
-    def forward(self, idx, targets=None, attention_mask=None):
-        device = idx.device
-        b, t = idx.size()
+    #def forward(self, idx, targets=None, attention_mask=None):
+    def forward(self, input_ids, labels=None, attention_mask=None):
+        device = input_ids.device
+        b, t = input_ids.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         
         # 位置情報の作成
         pos = torch.arange(0, t, dtype=torch.long, device=device) # (t)
 
         # トークン埋め込みと位置埋め込みを合体
-        tok_emb = self.transformer.wte(idx) # (b, t, n_embd)
+        tok_emb = self.transformer.wte(input_ids) # (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
 
@@ -191,10 +192,10 @@ class Transformer(nn.Module):
             x = block(x, attention_mask=attention_mask)
         x = self.transformer.ln_f(x)
 
-        if targets is not None:
+        if labels is not None:
             # 学習時：Loss（CrossEntropy）も計算
             logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-100)
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), labels.view(-1), ignore_index=-100)
         else:
             # 生成時：最後のトークンの予測結果（Logits）のみ返す
             logits = self.lm_head(x[:, [-1], :]) # (b, 1, vocab_size)
