@@ -1,7 +1,8 @@
 # Scratch Transformer Decoder (PyTorch)
 
-PyTorchによる小さなTransformerデコーダのスクラッチ実装です。  
-日本語ニュースコーパス（livedoorニュース）を用いて、因果言語モデル（Causal LM）を学習し、文章生成まで行います。
+PyTorchによるTransformer DecoderのScratch実装
+CPU環境で学習できる程度の小規模Modelを対象とする
+日本語ニュースコーパス（livedoorニュース）を用いて、因果言語モデル（Causal LM）を学習し、文章生成まで行う
 
 - モデル: Transformer Decoder（GPT風、13.8M params）
 - フレームワーク: PyTorch
@@ -54,39 +55,99 @@ scratch-transformer-decoder-pytorch/
 ├── docker-compose.yml
 ├── src/
 │   ├── models/
-│   │   └── transformer.py     # Transformerデコーダ本体
+│   │   ├── __init__.py
+│   │   └── transformer.py        # Transformerデコーダ本体
 │   ├── data/
-│   │   ├── dataset.py         # Datasetクラス
-│   │   └── tokenizer.py       # トークナイザ
-│   ├── train.py               # 学習スクリプト（Resume/中断機能付き）
-│   └── generate.py            # 生成スクリプト (EOS除去修正済)
+│   │   ├── __init__.py
+│   │   ├── dataset.py            # Datasetクラス
+│   │   ├── tokenizer.py          # トークナイザ
+│   │   └── train_tokenizer.py    # トークナイザの学習
+│   ├── utils.py
+│   ├── train.py                  # 学習スクリプト（Resume/中断機能付き）
+│   └── generate.py               # 生成スクリプト (EOS除去修正済)
+├── tests
+│   └── test_dataset_logic.py
 ├── configs/
-│   └── model_config.yaml      # モデル・学習設定
-├── data/                      # コーパス・トークナイザーモデル
-├── outputs/                   # チェックポイント・ログ
+│   └── model_config.yaml         # モデル・学習設定
+├── data/                         # コーパス・トークナイザーモデル
+│   ├── text/                     # 学習用Text data
+│   └── tokenizer/                # 自前Tokenizer
+│   │   ├── news_spm.model
+│   │   └── news_spm.vocab
+├── outputs/
+│   ├── checkpoints/              # Checkpoint
+│   └── train.log                 # Log
+├── .gitignore
 └── README.md
 ```
 
 ## 進捗状況
 
+### 自前実装
 - [x] ニュースコーパスの準備
-- [x] トークナイザの実装（JapaneseTokenizer）
-- [x] Transformerデコーダのスクラッチ実装（Flash Attention対応）
 - [x] Dataset／DataLoaderの実装
+- [x] Tokenizerの実装（JapaneseTokenizer）
+- [x] Tokenizerの学習
+- [x] Transformerデコーダのスクラッチ実装（Flash Attention対応）
 - [x] 学習スクリプト（train.py）の実装（Resume機能、中断保存機能）
 - [x] 生成スクリプト（generate.py）の実装
-- [x] 大規模学習の実施 (50000回実施，Overfittingを確認)
+- [x] 本番学習の実施 (50000回実施，Overfittingを確認)
 - [ ] 生成文章の改善
 - [ ] READMEへの技術解説・生成例の追加
+### 公開Modelの活用
+- [x] 公開モデル（rinna/japanese-gpt2-xsmall）の導入と，Scratch/公開Model活用の切り替え対応
+- [x] 追加学習の実験
+- [x] 追加学習による事前学習モデルの評価 (悪化の確認)
+- [ ] モデルサイズ・データ規模の限界に関する考察の追加
+- [ ] 追加学習なしでの運用方針の検討
 
 ## 学習結果と考察 (50,000 iterations)
 
-50,000回のFull学習 (`ckpt_final.pt`)の結果，以下の知見が得られました．
+### 自前実装について
+50,000回のFull学習を実施
 
 1. **過学習の発生**:
     - Train Loss: 0.1448 / Val Loss: 6.1779
-    - 学習Dataをほぼ暗記するまで？学習が進みましたが，検証Dataに対するLossが高く，強い過学習の状態にあります．
+    - 検証Dataに対するLossが高く，強い過学習の状態に至った
 2. **生成品質の限界**:
-    - News記事特有のPhraseや固有名詞 (iPhone 4S等)は再現できますが？，文章全体の論理的な一貫性を保つには13.8MというModel sizeでは限界があるか．
-3. **技術的修正**:
-    - Promptの末尾にEOS (終了符号)が付与されていると生成が壊れる問題を特定し，`generate.py`にて除去処理を実装しました．
+    - 損失を低下させることはできているが，生成品質は低い
+    - 文章全体の論理的な一貫性を保つには13.8MというModel sizeでは限界があると考えられる
+    - あるいは，過学習傾向であることから，Datasetが適していない，少ないと考えられる
+
+### 追加学習について
+自前実装で精度が出せなかったため，公開Modelを活用
+- `rinna/japanese-gpt2-xsmall`
+- https://huggingface.co/rinna/japanese-gpt2-xsmall
+- (43.7M params)
+- 手元のDatasetを用いて追加学習を実施
+
+1. **Baseline Model**
+    - 公開Model素の生成文章は日本語としての構造をある程度保った出力が確認できた
+    - しばしば未知語を出力するなど，Model規模的な性能限界は感じられる
+2. **Modelの悪化**
+    - 損失の低下は確認できた
+    - しかし，生成文章は日本語としての体裁を保てないことが多く，性能は悪化したと言わざるを得ない
+3. **Modelの性能変化**
+    - Programに明らかな欠陥が見られなかったため，実装上の不備はないものとし，悪化の様子を観察
+    - 学習率を一律・低めに設定し，細かにModelを保存・性能確認を行い，出力を比較
+    - 500回程度までは文章としての構造を保てている
+    - 800回程度で文章が崩れ始める
+    - 1000回程度まで進めると，完全に崩れたといえる程に悪化する
+    - 徐々に崩れる様子が確認でき，設定やDatasetによるものと考える
+
+### 考察まとめ
+- 対象としたModel sizeは，課題に対して小規模すぎると考えられるため，Model sizeを上げることで改善が見込める
+- 自前実装・追加実装ともに性能は低く，改善が望まれる
+
+## 今後の課題
+- Datasetの差し替え
+- 生成長を制限し，目標を短文に絞る
+- Model sizeを上げる
+
+## 実験詳細
+xxxxxxx
+
+----------
+
+技術的修正:
+- Promptの末尾にEOS (終了符号)が付与されていると生成が壊れる問題を特定し，`generate.py`にて除去処理を実装しました．
