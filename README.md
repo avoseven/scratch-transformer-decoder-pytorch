@@ -1,13 +1,18 @@
 # Scratch Transformer Decoder (PyTorch)
 
 PyTorchによるTransformer DecoderのScratch実装
-CPU環境で学習できる程度の小規模Modelを対象とする
-日本語ニュースコーパス（livedoorニュース）を用いて、因果言語モデル（Causal LM）を学習し、文章生成まで行う
+- CPU環境で学習できる程度の小規模Modelを対象とする
+- 日本語ニュースコーパス（livedoorニュース）を用いて、因果言語モデル（Causal LM）を学習し、文章生成まで行う
 
 - モデル: Transformer Decoder（GPT風、13.8M params）
 - フレームワーク: PyTorch
 - データセット: livedoorニュースコーパス
 - 環境: Docker / Docker Compose
+
+下記の流れで現在に至る
+1. Transformer Decoderを実装し，0から学習させたが，生成能力は芳しくなかった
+2. 公開Modelを導入し，追加学習を実施したが，なおも生成能力は芳しくなかった
+3. 現時点での結論としては，公開Modelをそのまま流用するのが最良であるとする
 
 ## 使い方（学習実行）
 
@@ -81,9 +86,10 @@ scratch-transformer-decoder-pytorch/
 └── README.md
 ```
 
-## 進捗状況
+## 1. 自前実装
+Transformer Decoderを実装し，0から学習させたが，生成能力は芳しくなかった
 
-### 自前実装
+### 進捗状況
 - [x] ニュースコーパスの準備
 - [x] Dataset／DataLoaderの実装
 - [x] Tokenizerの実装（JapaneseTokenizer）
@@ -94,16 +100,8 @@ scratch-transformer-decoder-pytorch/
 - [x] 本番学習の実施 (50000回実施，Overfittingを確認)
 - [ ] 生成文章の改善
 - [ ] READMEへの技術解説・生成例の追加
-### 公開Modelの活用
-- [x] 公開モデル（rinna/japanese-gpt2-xsmall）の導入と，Scratch/公開Model活用の切り替え対応
-- [x] 追加学習の実験
-- [x] 追加学習による事前学習モデルの評価 (悪化の確認)
-- [ ] モデルサイズ・データ規模の限界に関する考察の追加
-- [ ] 追加学習なしでの運用方針の検討
 
-## 学習結果と考察 (50,000 iterations)
-
-### 自前実装について
+### 学習結果
 50,000回のFull学習を実施
 
 1. **過学習の発生**:
@@ -114,7 +112,19 @@ scratch-transformer-decoder-pytorch/
     - 文章全体の論理的な一貫性を保つには13.8MというModel sizeでは限界があると考えられる
     - あるいは，過学習傾向であることから，Datasetが適していない，少ないと考えられる
 
-### 追加学習について
+ここで，同等の規模の優れたModelと比較し，評価や改善につなげることとした
+
+## 2. 公開Modelの活用
+公開Modelを導入し，追加学習を実施したが，なおも生成能力は芳しくなかった
+
+### 進捗状況
+- [x] 公開モデル（rinna/japanese-gpt2-xsmall）の導入と，Scratch/公開Model活用の切り替え対応
+- [x] 追加学習の実験
+- [x] 追加学習による事前学習モデルの評価 (悪化の確認)
+- [ ] モデルサイズ・データ規模の限界に関する考察の追加
+- [ ] 追加学習なしでの運用方針の検討
+
+### 学習結果
 自前実装で精度が出せなかったため，公開Modelを活用
 - `rinna/japanese-gpt2-xsmall`
 - https://huggingface.co/rinna/japanese-gpt2-xsmall
@@ -138,6 +148,7 @@ scratch-transformer-decoder-pytorch/
 ### 考察まとめ
 - 対象としたModel sizeは，課題に対して小規模すぎると考えられるため，Model sizeを上げることで改善が見込める
 - 自前実装・追加実装ともに性能は低く，改善が望まれる
+- 現時点での結論としては，公開Modelをそのまま流用するのが最良であるとする
 
 ## 今後の課題
 - Datasetの差し替え
