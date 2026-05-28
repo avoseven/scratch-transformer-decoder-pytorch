@@ -13,20 +13,20 @@ model:
 # 学習設定
 train:
   batch_size: 16
-  learning_rate: 0.000001
-  weight_decay: 0.0
+  learning_rate: 0.0001
+  weight_decay: 0.1
   beta1: 0.9
   beta2: 0.95
   grad_clip: 1.0
   
-  max_iters: 1000
-  warmup_iters: 1 # 最初の200ステップで学習率をゆっくり上げる
-  lr_decay_iters: 0 # max_itersと同じに設定
-  min_lr: 0.000001 # learning_rate / 10 程度
+  max_iters: 10000
+  warmup_iters: 200 # 最初の200ステップで学習率をゆっくり上げる
+  lr_decay_iters: 10000 # max_itersと同じに設定
+  min_lr: 0.00001 # learning_rate / 10 程度
   
-  eval_interval: 10
-  eval_iters: 10
-  save_interval: 10
+  eval_interval: 500
+  eval_iters: 50
+  save_interval: 1000
 
 # パス設定
 paths:
