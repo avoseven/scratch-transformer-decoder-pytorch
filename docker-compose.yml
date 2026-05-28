@@ -10,6 +10,7 @@ services:
       - ./configs:/workspace/configs
       - ./data:/workspace/data
       - ./outputs:/workspace/outputs
+      - ./outputs_details:/workspace/outputs_details
     working_dir: /workspace
     command: tail -f /dev/null  # tail -f /dev/null (何も出力しないファイルを監視し続けるコマンド)
                                 # のような「終了しないコマンド」を指定して、コンテナを常時起動状態に保つ
